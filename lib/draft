@@ -1,0 +1,232 @@
+
+//////////////////Test
+ void startLocationTracking(
+      BuildContext context, Map<String, dynamic> route) async {
+    await initializeNotifications(); // Ensure notifications are initialized
+
+    LocationPermission permission;
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        return Future.error('Location permissions are denied');
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      return Future.error('Location permissions are permanently denied.');
+    }
+
+    // Settings for location updates
+    LocationSettings locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 20, // Update after moving 50 meters
+    );
+
+    Duration updateInterval = Duration(seconds: 5);
+    StreamSubscription<Position>? positionStream;
+
+    bool startTrip = false;
+    bool nextStationFlag = true;
+    int stationIndex = 0;
+    double previosDistance = 0;
+    String nextStation = "";
+    String currentStation = "";
+
+    // List of simulated positions (latitude, longitude)
+    List<LatLng> simulatedPositions = [
+      LatLng(29.952885, 31.025356),
+      LatLng(29.952885, 31.025357),
+      LatLng(30.02, 31.238415),
+      LatLng(30.037016, 31.238415), // Saad Zaghloul
+      LatLng(30.044141, 31.234446), // Sadat
+      LatLng(30.04167, 31.22528), // Opera
+      LatLng(30.03833, 31.21194), // Dokki
+      LatLng(30.03583, 31.20028), // EL-Bohoth
+    ];
+
+    int simulatedPositionsIndex = 0;
+    int counter = 0;
+
+    Map<String, List<String>> initializeRouteMap = initializeRoute(route);
+
+    print(route);
+    print(initializeRouteMap);
+
+    void startListening() async {
+      permission = await Geolocator.checkPermission();
+      print('Permission status: $permission');
+
+      if (permission == LocationPermission.denied) {
+        print('Location permission denied');
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          return Future.error('Location permissions are denied');
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print('Location permission denied forever');
+        return Future.error('Location permissions are permanently denied.');
+      }
+
+      print('Location permission granted');
+
+      positionStream =
+          Geolocator.getPositionStream(locationSettings: locationSettings)
+              .listen((Position position) async {
+        if (counter % 2 == 0) {
+          simulatedPositionsIndex++;
+        }
+        counter++;
+        print("Counter: ");
+        print(counter);
+        print("simulatedPositionsIndex: ");
+        print(simulatedPositionsIndex);
+
+        if (startTrip) {
+          // Logic for when the trip starts
+          currentStation = stationIndex == 0
+              ? initializeRouteMap["Departure Station"]![0]
+              : currentStation =
+                  initializeRouteMap["Stations"]![stationIndex - 1];
+          nextStation = stationIndex < initializeRouteMap["Stations"]!.length
+              ? initializeRouteMap["Stations"]![stationIndex]
+              : "";
+
+          print(currentStation);
+          print(nextStation);
+          if (nextStationFlag) {
+            if (initializeRouteMap["Exchange Station"]!.contains(nextStation)) {
+              // Get localized message for distance to the next station
+              String exchangeMessage =
+                  AppLocalizations.of(context)!.changeLineAt(
+                currentStation,
+                initializeRouteMap["Directions"]![
+                    initializeRouteMap["Exchange Station"]!
+                        .indexOf(nextStation)],
+                initializeRouteMap["Lines"]![
+                    initializeRouteMap["Exchange Station"]!
+                        .indexOf(nextStation)],
+                nextStation,
+              );
+
+              // Send notification about the distance to the next station
+              await sendNotification(
+                AppLocalizations.of(context)!.exchangeStation,
+                exchangeMessage,
+              );
+            } else if (initializeRouteMap["Arrival Station"]!
+                .contains(nextStation)) {
+              // Get localized message for distance to the next station
+              String arrivalMessage = AppLocalizations.of(context)!
+                  .finalStation(currentStation, nextStation);
+
+              // Send notification about the distance to the next station
+              await sendNotification(
+                AppLocalizations.of(context)!.arrivalStationTitle,
+                arrivalMessage,
+              );
+            } else if (!initializeRouteMap["Arrival Station"]!
+                .contains(currentStation)) {
+              // Get localized message for distance to the next station
+              String intermediateMessage = AppLocalizations.of(context)!
+                  .nextStation(currentStation, nextStation);
+
+              // Send notification about the distance to the next station
+              await sendNotification(
+                AppLocalizations.of(context)!.intermediateStationsTitle,
+                intermediateMessage,
+              );
+            }
+          }
+
+          nextStationFlag = false;
+
+          if (stationIndex < initializeRouteMap["Stations"]!.length) {
+            Map<String, dynamic> StationPosition =
+                await findNextStationPosition(nextStation);
+
+            double distanceToNextStation = Geolocator.distanceBetween(
+              simulatedPositions[simulatedPositionsIndex].latitude,
+              simulatedPositions[simulatedPositionsIndex].longitude,
+              StationPosition["latitude"],
+              StationPosition["longitude"],
+            );
+
+            print("distanceToNextStation");
+            print(distanceToNextStation);
+            // Add a threshold to prevent sending notifications for very small changes
+            double distanceThreshold = 30; // Notify only if change > 100 meters
+
+            if ((distanceToNextStation).abs() < distanceThreshold) {
+              stationIndex++;
+              nextStationFlag = true;
+            }
+          } else {
+            // Stop the location updates by cancelling the position stream subscription
+            positionStream?.cancel();
+
+            // Optionally, send a final notification that the trip has ended
+            await sendNotification(
+              AppLocalizations.of(context)!.arrivalStationTitle,
+              AppLocalizations.of(context)!.finalStationReached,
+            );
+          }
+        } else {
+          Map<String, dynamic> StationPosition = await findNextStationPosition(
+              initializeRouteMap["Departure Station"]![0]);
+
+          double distanceToNextStation = Geolocator.distanceBetween(
+            simulatedPositions[simulatedPositionsIndex].latitude,
+            simulatedPositions[simulatedPositionsIndex].longitude,
+            StationPosition["latitude"],
+            StationPosition["longitude"],
+          );
+
+          if (distanceToNextStation < 30) {
+            startTrip = true;
+          }
+
+          // Add a threshold to prevent sending notifications for very small changes
+          double distanceThreshold = 100; // Notify only if change > 100 meters
+
+          print(
+              "Current distance to next station: $distanceToNextStation meters");
+          print(
+              "Difference from previous distance: ${(previosDistance - distanceToNextStation).abs()} meters");
+
+          if ((previosDistance - distanceToNextStation).abs() >
+                  distanceThreshold &&
+              !startTrip) {
+            print("Significant movement detected. Sending notification...");
+
+            // Get localized message for distance to the next station
+            String distanceMessage =
+                AppLocalizations.of(context)!.distanceToStation(
+              distanceToNextStation.toStringAsFixed(0),
+              initializeRouteMap["Departure Station"]![0],
+            );
+
+            // Send notification about the distance to the next station
+            await sendNotification(
+              AppLocalizations.of(context)!.departureStationTitle,
+              distanceMessage,
+            );
+
+            // Update previous distance to the new one
+            previosDistance = distanceToNextStation;
+          } else {
+            print("Movement too small, not sending notification.");
+          }
+        }
+
+        // Restart location updates after a delay
+        positionStream?.cancel();
+        Future.delayed(updateInterval, startListening);
+      });
+    }
+
+    startListening(); // Start tracking location
+  }
